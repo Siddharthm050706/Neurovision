@@ -8,6 +8,8 @@ import type {
   ResultRecord,
 } from '../types';
 
+export type ProcessingOperationStatus = 'idle' | 'processing' | 'succeeded' | 'failed';
+
 interface AppState {
   // Session Job State
   currentJobId: string | null;
@@ -26,6 +28,11 @@ interface AppState {
   isSegmenting: boolean;
   isEnhancing: boolean;
   isLoadingResults: boolean;
+  processingStatus: ProcessingOperationStatus;
+  segmentationStatus: ProcessingOperationStatus;
+  enhancementStatus: ProcessingOperationStatus;
+  segmentationError: string | null;
+  enhancementError: string | null;
 
   // Global Alerts / Errors
   error: string | null;
@@ -38,6 +45,11 @@ interface AppState {
   setIsSegmenting: (val: boolean) => void;
   setEnhanceResult: (result: EnhanceResponse) => void;
   setIsEnhancing: (val: boolean) => void;
+  setProcessingStatus: (status: ProcessingOperationStatus) => void;
+  setSegmentationStatus: (status: ProcessingOperationStatus) => void;
+  setEnhancementStatus: (status: ProcessingOperationStatus) => void;
+  setSegmentationError: (error: string | null) => void;
+  setEnhancementError: (error: string | null) => void;
   setResultRecord: (record: ResultRecord | null) => void;
   setIsLoadingResults: (val: boolean) => void;
   setHealth: (health: HealthResponse | null) => void;
@@ -71,6 +83,11 @@ export const useAppStore = create<AppState>((set) => ({
   isSegmenting: false,
   isEnhancing: false,
   isLoadingResults: false,
+  processingStatus: 'idle',
+  segmentationStatus: 'idle',
+  enhancementStatus: 'idle',
+  segmentationError: null,
+  enhancementError: null,
 
   error: null,
 
@@ -82,6 +99,17 @@ export const useAppStore = create<AppState>((set) => ({
     set({
       currentJobId: jobId,
       uploadData: uploadData || null,
+      segmentResult: null,
+      enhanceResult: null,
+      resultRecord: null,
+      isLoadingResults: false,
+      isSegmenting: false,
+      isEnhancing: false,
+      processingStatus: 'idle',
+      segmentationStatus: 'idle',
+      enhancementStatus: 'idle',
+      segmentationError: null,
+      enhancementError: null,
       error: null,
     });
   },
@@ -92,6 +120,11 @@ export const useAppStore = create<AppState>((set) => ({
   setIsSegmenting: (val: boolean) => set({ isSegmenting: val }),
   setEnhanceResult: (result: EnhanceResponse) => set({ enhanceResult: result }),
   setIsEnhancing: (val: boolean) => set({ isEnhancing: val }),
+  setProcessingStatus: (status: ProcessingOperationStatus) => set({ processingStatus: status }),
+  setSegmentationStatus: (status: ProcessingOperationStatus) => set({ segmentationStatus: status }),
+  setEnhancementStatus: (status: ProcessingOperationStatus) => set({ enhancementStatus: status }),
+  setSegmentationError: (segmentationError: string | null) => set({ segmentationError }),
+  setEnhancementError: (enhancementError: string | null) => set({ enhancementError }),
   setResultRecord: (record: ResultRecord | null) => set({ resultRecord: record }),
   setIsLoadingResults: (val: boolean) => set({ isLoadingResults: val }),
   setHealth: (health: HealthResponse | null) => set({ health }),
@@ -111,6 +144,12 @@ export const useAppStore = create<AppState>((set) => ({
       isUploading: false,
       isSegmenting: false,
       isEnhancing: false,
+      isLoadingResults: false,
+      processingStatus: 'idle',
+      segmentationStatus: 'idle',
+      enhancementStatus: 'idle',
+      segmentationError: null,
+      enhancementError: null,
       error: null,
     });
   },

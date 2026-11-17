@@ -1,17 +1,34 @@
-import React, { useState, useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Upload,
-  FileCheck,
   AlertCircle,
   ArrowRight,
-  HardDrive,
-  Info,
+  Brain,
   CheckCircle2,
-  RefreshCw,
+  FileUp,
+  LoaderCircle,
+  ScanLine,
+  Sparkles,
+  Trash2,
+  Upload,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { uploadService } from '../api/uploadService';
+import { enhancementService } from '../api/enhancementService';
+import { segmentationService } from '../api/segmentationService';
+
+const MAX_FILE_SIZE_BYTES = 150 * 1024 * 1024;
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(2)} ${units[unitIndex]}`;
+}
 
 export const UploadPage: React.FC = () => {
   const navigate = useNavigate();
@@ -19,9 +36,26 @@ export const UploadPage: React.FC = () => {
     currentJobId,
     uploadData,
     setJob,
+    resetSession,
+    processingStatus,
+    segmentationStatus,
+    enhancementStatus,
+    segmentationError,
+    enhancementError,
+    setProcessingStatus,
+    setSegmentationStatus,
+    setEnhancementStatus,
+    setSegmentationError,
+    setEnhancementError,
+    setSegmentResult,
+    setEnhanceResult,
     isUploading,
     uploadProgress,
     setIsUploading,
+    isSegmenting,
+    isEnhancing,
+    setIsSegmenting,
+    setIsEnhancing,
     setUploadProgress,
     setError,
     error,
@@ -29,298 +63,452 @@ export const UploadPage: React.FC = () => {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [dragActive, setDragActive] = useState(false);
-  const [localValidationMsg, setLocalValidationMsg] = useState<string | null>(null);
+  const [validationMessage, setValidationMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  };
+  const hasUploadedVolume = Boolean(currentJobId && uploadData);
+  const isProcessing = isSegmenting || isEnhancing || processingStatus === 'processing';
+  const completedOperations = [enhancementStatus, segmentationStatus].filter((status) => status === 'succeeded').length;
+  const processingProgress = Math.round((completedOperations / 2) * 100);
+  const operationItems = [
+    { label: 'Image enhancement', icon: Sparkles, status: enhancementStatus, error: enhancementError },
+    { label: 'Tumor segmentation', icon: Brain, status: segmentationStatus, error: segmentationError },
+  ];
 
   const validateAndSelectFile = (file: File) => {
-    setLocalValidationMsg(null);
+    setValidationMessage(null);
     setError(null);
-
     const name = file.name.toLowerCase();
+
     if (!name.endsWith('.nii') && !name.endsWith('.nii.gz')) {
-      setLocalValidationMsg('Invalid file format. Only 4D NIfTI files (.nii or .nii.gz) are supported.');
-      setSelectedFile(null);
+      setValidationMessage('Unsupported file type. Select one 4D NIfTI volume with a .nii or .nii.gz extension.');
       return;
     }
-
     if (file.size === 0) {
-      setLocalValidationMsg('File is empty (0 bytes).');
-      setSelectedFile(null);
+      setValidationMessage('This file is empty. Select a non-empty NIfTI volume.');
       return;
     }
-
-    // Check size against 150 MB limit
-    const sizeMb = file.size / (1024 * 1024);
-    if (sizeMb > 150) {
-      setLocalValidationMsg(`File size (${sizeMb.toFixed(1)} MB) exceeds the maximum limit of 150 MB.`);
-      setSelectedFile(null);
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setValidationMessage(`File size is ${formatBytes(file.size)}. The upload limit is 150 MB.`);
       return;
     }
 
     setSelectedFile(file);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
     setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      validateAndSelectFile(e.dataTransfer.files[0]);
-    }
+    if (isUploading) return;
+    const file = event.dataTransfer.files.item(0);
+    if (file) validateAndSelectFile(file);
   };
 
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      validateAndSelectFile(e.target.files[0]);
-    }
+  const handleBrowseChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.item(0);
+    if (file) validateAndSelectFile(file);
+    event.target.value = '';
   };
 
   const handleUpload = async () => {
-    if (!selectedFile) return;
+    if (!selectedFile || isUploading) return;
 
     setIsUploading(true);
     setUploadProgress(0);
     setError(null);
-    setLocalValidationMsg(null);
-
+    setValidationMessage(null);
     try {
-      const res = await uploadService.uploadMRI(selectedFile, (percent) => {
-        setUploadProgress(percent);
-      });
-      setJob(res.job_id, res);
+      const response = await uploadService.uploadMRI(selectedFile, setUploadProgress);
+      setJob(response.job_id, response);
       setSelectedFile(null);
-    } catch (err: any) {
-      setError(err.message || 'MRI upload or backend validation failed.');
+    } catch (uploadError: unknown) {
+      setError(uploadError instanceof Error ? uploadError.message : 'MRI upload or validation failed.');
     } finally {
       setIsUploading(false);
     }
   };
 
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  const handleRemove = () => {
+    if (hasUploadedVolume) {
+      resetSession();
+    }
+    setSelectedFile(null);
+    setValidationMessage(null);
+    setError(null);
+  };
+
+  const handleProcessMRI = async () => {
+    if (!currentJobId || !uploadData || isProcessing || selectedFile) return;
+
+    const shouldEnhance = enhancementStatus !== 'succeeded';
+    const shouldSegment = segmentationStatus !== 'succeeded';
+    if (!shouldEnhance && !shouldSegment) return;
+
+    setProcessingStatus('processing');
+    setError(null);
+    if (shouldEnhance) {
+      setEnhancementStatus('processing');
+      setEnhancementError(null);
+      setIsEnhancing(true);
+    }
+    if (shouldSegment) {
+      setSegmentationStatus('processing');
+      setSegmentationError(null);
+      setIsSegmenting(true);
+    }
+
+    const tasks = await Promise.allSettled([
+      shouldEnhance
+        ? enhancementService.runEnhancement(currentJobId).then((result) => {
+            if (useAppStore.getState().currentJobId !== currentJobId) return;
+            setEnhanceResult(result);
+            setEnhancementStatus('succeeded');
+          }).catch((operationError: unknown) => {
+            if (useAppStore.getState().currentJobId === currentJobId) {
+              const message = operationError instanceof Error ? operationError.message : 'Image enhancement failed.';
+              setEnhancementError(message);
+              setEnhancementStatus('failed');
+            }
+            throw operationError;
+          })
+        : Promise.resolve(),
+      shouldSegment
+        ? segmentationService.runSegmentation(currentJobId, { generate_visualization: true }).then((result) => {
+            if (useAppStore.getState().currentJobId !== currentJobId) return;
+            setSegmentResult(result);
+            setSegmentationStatus('succeeded');
+          }).catch((operationError: unknown) => {
+            if (useAppStore.getState().currentJobId === currentJobId) {
+              const message = operationError instanceof Error ? operationError.message : 'Tumor segmentation failed.';
+              setSegmentationError(message);
+              setSegmentationStatus('failed');
+            }
+            throw operationError;
+          })
+        : Promise.resolve(),
+    ]);
+
+    if (useAppStore.getState().currentJobId !== currentJobId) return;
+
+    setIsEnhancing(false);
+    setIsSegmenting(false);
+    if (tasks.every((task) => task.status === 'fulfilled')) {
+      setProcessingStatus('succeeded');
+      setError(null);
+    } else {
+      setProcessingStatus('failed');
+      setError('One or more processing operations failed. Retry the failed operation below.');
+    }
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-          <Upload className="w-5 h-5 text-cyan-400" />
-          <span>Upload 4D Brain MRI Volume</span>
-        </h1>
-        <p className="text-xs text-slate-400 mt-1">
-          Upload a multi-modality NIfTI scan (FLAIR, T1, T1ce, T2). The backend performs structural verification and creates an isolated job session.
+    <div className="mx-auto w-full max-w-6xl space-y-6 text-slate-800">
+      <header>
+        <div className="flex items-center gap-2 text-xs font-medium text-teal-800">
+          <ScanLine className="h-4 w-4" aria-hidden="true" />
+          <span>Clinical imaging workspace</span>
+        </div>
+        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+          Upload Brain MRI
+        </h2>
+        <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+          Upload one 4D NIfTI volume, then process it once for image enhancement and tumor segmentation.
         </p>
-      </div>
+      </header>
 
-      {/* Format Requirements Panel */}
-      <div className="bg-[#0e1626] border border-cyan-900/30 rounded-xl p-4 text-xs text-slate-300 grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="flex items-start gap-2.5">
-          <FileCheck className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="mb-4 flex items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
+            <Upload className="h-4 w-4" />
+          </span>
           <div>
-            <div className="font-semibold text-slate-200">Supported Formats</div>
-            <div className="text-[11px] text-slate-400 mt-0.5"><code>.nii</code> or <code>.nii.gz</code> 4-modality files</div>
+            <h2 className="text-sm font-semibold text-slate-900">
+              {hasUploadedVolume ? 'Replace or upload an MRI volume' : 'Select an MRI volume'}
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              Drag a NIfTI file into the area below, or browse your device.
+            </p>
           </div>
         </div>
 
-        <div className="flex items-start gap-2.5">
-          <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-          <div>
-            <div className="font-semibold text-slate-200">Channel Order</div>
-            <div className="text-[11px] text-slate-400 mt-0.5">0: FLAIR, 1: T1, 2: T1ce, 3: T2</div>
-          </div>
-        </div>
-
-        <div className="flex items-start gap-2.5">
-          <HardDrive className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-          <div>
-            <div className="font-semibold text-slate-200">Dimensions & Cap</div>
-            <div className="text-[11px] text-slate-400 mt-0.5">4D (X, Y, Z, 4) up to 150 MB</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Upload Drop Zone */}
-      <div
-        onDragEnter={handleDrag}
-        onDragLeave={handleDrag}
-        onDragOver={handleDrag}
-        onDrop={handleDrop}
-        onClick={() => !isUploading && fileInputRef.current?.click()}
-        className={`border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center text-center cursor-pointer transition-all ${
-          dragActive
-            ? 'border-cyan-400 bg-cyan-950/30'
-            : selectedFile
-            ? 'border-teal-500/80 bg-teal-950/20'
-            : 'border-slate-700/80 hover:border-slate-600 bg-panel hover:bg-panelHover'
-        } ${isUploading ? 'pointer-events-none opacity-60' : ''}`}
-      >
         <input
           ref={fileInputRef}
           type="file"
           accept=".nii,.nii.gz,application/gzip"
-          onChange={handleFileInputChange}
-          className="hidden"
+          onChange={handleBrowseChange}
+          className="sr-only"
+          aria-label="Choose a NIfTI MRI volume"
         />
-
-        <div className="w-12 h-12 rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center text-cyan-400 mb-3">
-          <Upload className="w-6 h-6" />
-        </div>
-
-        {selectedFile ? (
-          <div className="space-y-1">
-            <div className="text-sm font-semibold text-teal-300 font-mono">
-              {selectedFile.name}
+        <div
+          onDragEnter={(event) => {
+            event.preventDefault();
+            if (!isUploading) setDragActive(true);
+          }}
+          onDragOver={(event) => event.preventDefault()}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false);
+          }}
+          onDrop={handleDrop}
+          className={`flex min-h-56 flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 py-8 text-center transition-colors ${
+            dragActive
+              ? 'border-teal-500 bg-teal-50'
+              : 'border-slate-300 bg-slate-50/70 hover:border-teal-400 hover:bg-teal-50/50'
+          } ${isUploading ? 'pointer-events-none opacity-70' : ''}`}
+        >
+          <span className={`flex h-14 w-14 items-center justify-center rounded-2xl ${
+            dragActive ? 'bg-teal-100 text-teal-800' : 'bg-white text-teal-700 shadow-sm ring-1 ring-slate-200'
+          }`}>
+            <FileUp className="h-7 w-7" aria-hidden="true" />
+          </span>
+          {selectedFile ? (
+            <div className="mt-4 max-w-full">
+              <p className="break-all text-sm font-semibold text-slate-900">{selectedFile.name}</p>
+              <p className="mt-1 text-xs text-slate-500">{formatBytes(selectedFile.size)} · Ready for server validation</p>
             </div>
-            <div className="text-xs text-slate-400 font-mono">
-              {formatBytes(selectedFile.size)} — Ready to upload
+          ) : (
+            <div className="mt-4">
+              <p className="text-sm font-semibold text-slate-900">
+                {dragActive ? 'Drop the MRI volume to select it' : 'Drag and drop your NIfTI volume here'}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">A single 4D volume containing FLAIR, T1, T1ce, and T2 channels</p>
             </div>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            <div className="text-sm font-semibold text-slate-200">
-              Drag and drop your 4D Brain MRI scan here
-            </div>
-            <div className="text-xs text-slate-400">
-              or <span className="text-cyan-400 font-medium">browse files</span> from your computer
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Validation Message / Error */}
-      {localValidationMsg && (
-        <div className="bg-amber-950/40 border border-amber-800/80 rounded-lg p-3 text-xs text-amber-300 flex items-center gap-2.5">
-          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-          <span>{localValidationMsg}</span>
-        </div>
-      )}
-
-      {error && (
-        <div className="bg-rose-950/40 border border-rose-800/80 rounded-lg p-3 text-xs text-rose-300 flex items-center gap-2.5">
-          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {/* Action Buttons & Upload Progress */}
-      {selectedFile && !isUploading && (
-        <div className="flex items-center justify-end gap-3 pt-2">
+          )}
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedFile(null);
-            }}
-            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            className="mt-4 inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-teal-400 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Cancel
+            <FileUp className="h-3.5 w-3.5" />
+            Browse Files
           </button>
-          <button
-            onClick={handleUpload}
-            className="flex items-center gap-2 px-5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-slate-950 text-xs font-semibold shadow-md transition-colors"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            <span>Upload and Verify MRI</span>
-          </button>
+          <p className="mt-3 text-[11px] text-slate-400">NIfTI only · Maximum file size 150 MB</p>
         </div>
-      )}
 
-      {/* Uploading Progress State */}
-      {isUploading && (
-        <div className="bg-panel border border-panelBorder rounded-xl p-5 space-y-3">
-          <div className="flex items-center justify-between text-xs font-mono">
-            <span className="text-cyan-300 flex items-center gap-2">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-              Streaming MRI volume to backend...
-            </span>
-            <span className="text-slate-400">{uploadProgress}%</span>
-          </div>
-          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-            <div
-              className="bg-cyan-500 h-2 transition-all duration-300 rounded-full"
-              style={{ width: `${uploadProgress}%` }}
-            />
-          </div>
-          <p className="text-[11px] text-slate-400">
-            Backend is performing NiBabel format parsing and multi-channel validation...
-          </p>
-        </div>
-      )}
-
-      {/* Successfully Uploaded Active Job Card */}
-      {uploadData && currentJobId && (
-        <div className="bg-panel border border-teal-800/60 rounded-xl p-5 space-y-4 shadow-lg">
-          <div className="flex items-center justify-between border-b border-panelBorder pb-3">
-            <div className="flex items-center gap-2.5">
-              <CheckCircle2 className="w-5 h-5 text-teal-400" />
-              <div>
-                <h3 className="text-sm font-bold text-white font-mono">
-                  MRI Scan Successfully Verified & Stored
-                </h3>
-                <div className="text-[11px] text-slate-400">
-                  Job ID: <code className="text-cyan-300">{currentJobId}</code>
-                </div>
-              </div>
-            </div>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800">
-              READY FOR INFERENCE
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800">
-              <div className="text-[11px] text-slate-400">Saved Filename</div>
-              <div className="text-slate-200 font-mono font-medium truncate mt-1">
-                {uploadData.filename}
-              </div>
-            </div>
-
-            <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800">
-              <div className="text-[11px] text-slate-400">Dimensions</div>
-              <div className="text-cyan-300 font-mono font-medium mt-1">
-                {uploadData.dimensions.join(' × ')}
-              </div>
-            </div>
-
-            <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800">
-              <div className="text-[11px] text-slate-400">Modalities</div>
-              <div className="text-slate-200 font-mono font-medium mt-1">
-                {uploadData.modalities} Channels
-              </div>
-            </div>
-
-            <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800">
-              <div className="text-[11px] text-slate-400">File Size</div>
-              <div className="text-slate-200 font-mono font-medium mt-1">
-                {formatBytes(uploadData.file_size_bytes)}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-2">
+        {selectedFile && !isUploading && (
+          <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <button
-              onClick={() => navigate('/processing')}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-slate-950 text-xs font-bold shadow-md transition-colors"
+              type="button"
+              onClick={() => setSelectedFile(null)}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
             >
-              <span>Continue to AI Segmentation</span>
-              <ArrowRight className="w-4 h-4" />
+              <Trash2 className="h-3.5 w-3.5" />
+              Remove file
+            </button>
+            <button
+              type="button"
+              onClick={handleUpload}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Upload and validate
             </button>
           </div>
-        </div>
+        )}
+
+        {isUploading && (
+          <div className="mt-4 rounded-lg border border-teal-100 bg-teal-50/70 p-4" aria-live="polite">
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-xs font-medium text-teal-900">
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+                Uploading and validating MRI volume
+              </span>
+              <span className="font-mono text-xs font-semibold text-teal-800">{uploadProgress}%</span>
+            </div>
+            <div
+              className="mt-3 h-2 overflow-hidden rounded-full bg-teal-100"
+              role="progressbar"
+              aria-label="MRI upload progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={uploadProgress}
+            >
+              <div className="h-full rounded-full bg-teal-600 transition-[width] duration-300" style={{ width: `${uploadProgress}%` }} />
+            </div>
+            <p className="mt-2 text-[11px] leading-5 text-slate-600">
+              The server checks NIfTI readability, 4D dimensions, and all four non-empty modality channels.
+            </p>
+          </div>
+        )}
+
+        {validationMessage && (
+          <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <p>{validationMessage}</p>
+          </div>
+        )}
+        {error && processingStatus === 'idle' && (
+          <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs leading-5 text-rose-900">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-700" />
+            <p>{error}</p>
+          </div>
+        )}
+      </section>
+
+      {hasUploadedVolume && uploadData && (
+        <section className="overflow-hidden rounded-xl border border-teal-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-slate-100 bg-teal-50/50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-100 text-teal-800">
+                <CheckCircle2 className="h-5 w-5" />
+              </span>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-slate-900">MRI volume verified and uploaded</h2>
+                <p className="mt-1 break-all text-xs text-slate-600">{uploadData.filename}</p>
+              </div>
+            </div>
+            <span className="inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full bg-teal-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-teal-800">
+              <span className="h-1.5 w-1.5 rounded-full bg-teal-600" />
+              Ready for analysis
+            </span>
+          </div>
+
+          <div className="grid gap-px bg-slate-200 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="bg-white p-4">
+              <p className="text-[11px] font-medium text-slate-500">Volume dimensions</p>
+              <p className="mt-1.5 break-words font-mono text-sm font-semibold text-slate-900">{uploadData.dimensions.join(' × ')}</p>
+            </div>
+            <div className="bg-white p-4">
+              <p className="text-[11px] font-medium text-slate-500">File size</p>
+              <p className="mt-1.5 font-mono text-sm font-semibold text-slate-900">{formatBytes(uploadData.file_size_bytes)}</p>
+            </div>
+            <div className="bg-white p-4">
+              <p className="text-[11px] font-medium text-slate-500">Modality channels</p>
+              <p className="mt-1.5 font-mono text-sm font-semibold text-slate-900">{uploadData.modalities} / 4</p>
+            </div>
+          </div>
+
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50/60 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+            <button
+              type="button"
+              onClick={handleRemove}
+              disabled={isProcessing}
+              className="inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-700"
+              title="Clear the active MRI from this browser session"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Remove MRI
+            </button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isProcessing}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Replace MRI
+              </button>
+            </div>
+          </div>
+          <p className="px-5 pb-3 text-[10px] leading-4 text-slate-400">
+            Remove MRI clears the active browser session. The current backend does not provide an endpoint to delete a previously uploaded server file.
+          </p>
+        </section>
+      )}
+
+      {hasUploadedVolume && uploadData && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">MRI processing</h2>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Run enhancement and tumor segmentation together. Results are saved for the viewer pages.
+              </p>
+            </div>
+            {processingStatus !== 'succeeded' && (
+              <button
+                type="button"
+                onClick={handleProcessMRI}
+                disabled={isProcessing || Boolean(selectedFile)}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isProcessing && <LoaderCircle className="h-4 w-4 animate-spin" />}
+                {isProcessing ? 'Processing MRI...' : processingStatus === 'failed' ? 'Retry failed operation' : 'Process MRI'}
+              </button>
+            )}
+          </div>
+
+          {processingStatus !== 'idle' && (
+            <div className="mt-5 space-y-4" aria-live="polite">
+              <div>
+                <div className="mb-2 flex items-center justify-between text-xs">
+                  <span className="font-medium text-slate-700">Overall progress</span>
+                  <span className="font-mono text-slate-600">{completedOperations} of 2 complete</span>
+                </div>
+                <div
+                  className="h-2 overflow-hidden rounded-full bg-slate-100"
+                  role="progressbar"
+                  aria-label="MRI processing progress"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={processingProgress}
+                >
+                  <div
+                    className="h-full rounded-full bg-teal-600 transition-[width] duration-300"
+                    style={{ width: `${processingProgress}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                {operationItems.map(({ label, icon: Icon, status, error: operationError }) => (
+                  <div key={label} className="rounded-lg border border-slate-200 bg-slate-50/70 p-3.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="flex items-center gap-2 text-xs font-semibold text-slate-800">
+                        <Icon className="h-4 w-4 text-teal-700" />
+                        {label}
+                      </span>
+                      <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${
+                        status === 'succeeded' ? 'text-teal-700' : status === 'failed' ? 'text-rose-700' : 'text-slate-500'
+                      }`}>
+                        {status === 'processing' && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+                        {status === 'succeeded' && <CheckCircle2 className="h-3.5 w-3.5" />}
+                        {status === 'failed' ? 'Failed' : status === 'succeeded' ? 'Complete' : status === 'processing' ? 'Running' : 'Waiting'}
+                      </span>
+                    </div>
+                    {operationError && (
+                      <p role="alert" className="mt-2 text-[11px] leading-5 text-rose-700">{operationError}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {processingStatus === 'failed' && error && (
+            <p role="alert" className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs leading-5 text-rose-800">
+              {error}
+            </p>
+          )}
+
+          {processingStatus === 'succeeded' && (
+            <div className="mt-5 space-y-4" aria-live="polite">
+              <p className="flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm font-medium text-teal-900">
+                <CheckCircle2 className="h-5 w-5 shrink-0 text-teal-700" />
+                MRI enhancement and tumor segmentation completed successfully.
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => navigate('/enhancement')}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 transition-colors hover:border-teal-400 hover:bg-teal-50"
+                >
+                  <Sparkles className="h-4 w-4 text-teal-700" />
+                  View Image Enhancement
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/processing')}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800"
+                >
+                  <Brain className="h-4 w-4" />
+                  View Tumor Segmentation
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
       )}
     </div>
   );
