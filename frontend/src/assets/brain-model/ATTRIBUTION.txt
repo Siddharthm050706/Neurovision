@@ -1,0 +1,10 @@
+Human Brain 3D model
+
+Source: VeativeWebVR, Veative Labs Private Limited (2019)
+Repository: https://github.com/Veativetech/VeativeWebVR
+Source model: Human_Brain/Models/Full Brain/Full Brain.gltf and related files
+License: MIT. See LICENSE.txt.
+
+The model was adapted into a single GLB asset. Its base-color texture was
+downsampled and its material was tinted steel blue-gray; the anatomical mesh
+and brain-part hierarchy were retained.

@@ -3,33 +3,60 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
   margin: 0;
-  background-color: #0a0e17;
-  color: #f3f4f6;
+  background-color: #f4f7f9;
+  color: #1e293b;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom sleek medical scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0a0e17;
+  background: #e9eef2;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1f2937;
+  background: #b7c4ce;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #374151;
+  background: #899ba9;
+}
+
+.global-brain-watermark {
+  position: fixed;
+  top: 50%;
+  left: calc(50% + var(--watermark-offset, 0px));
+  z-index: 0;
+  width: min(76vw, 48rem);
+  height: min(76dvh, 38rem);
+  opacity: 0.28;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  overflow: hidden;
+  contain: strict;
+}
+
+.global-brain-watermark canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 1023px) {
+  .global-brain-watermark {
+    left: 50%;
+    width: min(88vw, 42rem);
+    height: min(76dvh, 32rem);
+  }
 }

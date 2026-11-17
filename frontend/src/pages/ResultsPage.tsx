@@ -1,19 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   FileText,
   Download,
   BarChart2,
   Clock,
-  Cpu,
-  Layers,
+  CalendarDays,
   ArrowRight,
   RefreshCw,
   AlertTriangle,
   CheckCircle2,
-  Eye,
   Sparkles,
   Archive,
+  Brain,
 } from 'lucide-react';
 import {
   BarChart,
@@ -67,31 +66,6 @@ const VoxelTooltip: React.FC<TooltipProps> = ({ active, payload, label }) => {
   );
 };
 
-// ─── Metric cell ─────────────────────────────────────────────────────────────
-
-interface MetricCellProps {
-  value: number | null | undefined;
-}
-
-const MetricCell: React.FC<MetricCellProps> = ({ value }) => {
-  const display =
-    value == null ? '—' : `${(value * 100).toFixed(2)}%`;
-  const color =
-    value == null
-      ? 'text-slate-500'
-      : value >= 0.8
-      ? 'text-emerald-400'
-      : value >= 0.6
-      ? 'text-yellow-400'
-      : 'text-red-400';
-
-  return (
-    <td className="px-4 py-3 text-right">
-      <span className={`font-mono text-sm font-semibold ${color}`}>{display}</span>
-    </td>
-  );
-};
-
 // ─── Region pill ─────────────────────────────────────────────────────────────
 
 const regionMeta = {
@@ -103,9 +77,10 @@ const regionMeta = {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export const ResultsPage: React.FC = () => {
-  const navigate = useNavigate();
   const {
     currentJobId,
+    segmentResult,
+    enhanceResult,
     resultRecord,
     setResultRecord,
     isLoadingResults,
@@ -114,6 +89,8 @@ export const ResultsPage: React.FC = () => {
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloadingPng, setIsDownloadingPng] = useState(false);
+  const [downloadMessage, setDownloadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Load result record on mount if not already in store
   useEffect(() => {
@@ -145,12 +122,34 @@ export const ResultsPage: React.FC = () => {
   const handleDownloadZip = async () => {
     if (!currentJobId) return;
     setIsDownloading(true);
+    setDownloadMessage(null);
     try {
       await resultsService.downloadZip(currentJobId);
-    } catch {
-      // silent — browser will show nothing if download fails
+      setDownloadMessage({ type: 'success', text: 'Results ZIP downloaded successfully.' });
+    } catch (downloadError: unknown) {
+      setDownloadMessage({
+        type: 'error',
+        text: downloadError instanceof Error ? downloadError.message : 'Failed to download the results ZIP.',
+      });
     } finally {
       setIsDownloading(false);
+    }
+  };
+
+  const handleDownloadSegmentationPng = async () => {
+    if (!currentJobId) return;
+    setIsDownloadingPng(true);
+    setDownloadMessage(null);
+    try {
+      await resultsService.downloadVisualization(currentJobId);
+      setDownloadMessage({ type: 'success', text: 'Segmentation PNG downloaded successfully.' });
+    } catch (downloadError: unknown) {
+      setDownloadMessage({
+        type: 'error',
+        text: downloadError instanceof Error ? downloadError.message : 'Failed to download the segmentation PNG.',
+      });
+    } finally {
+      setIsDownloadingPng(false);
     }
   };
 
@@ -220,18 +219,6 @@ export const ResultsPage: React.FC = () => {
     { region: 'ET', voxels: resultRecord.region_voxels.ET, ...regionMeta.ET },
   ];
 
-  // ── Evaluation metrics ────────────────────────────────────────────────────
-
-  const metrics = resultRecord.evaluation_metrics;
-  const metricRows = metrics
-    ? [
-        { label: 'Dice Score', key: 'dice' },
-        { label: 'IoU (Jaccard)', key: 'iou' },
-        { label: 'Precision', key: 'precision' },
-        { label: 'Recall (Sensitivity)', key: 'recall' },
-      ]
-    : [];
-
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -244,12 +231,23 @@ export const ResultsPage: React.FC = () => {
             Results Report
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Full inference record for job{' '}
-            <span className="font-mono text-cyan-400">{currentJobId}</span>
+            Full inference record for the active MRI session.
           </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
+          <button
+            onClick={handleDownloadSegmentationPng}
+            disabled={isDownloadingPng}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-teal-600 disabled:opacity-50"
+          >
+            {isDownloadingPng ? (
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
+            {isDownloadingPng ? 'Downloading…' : 'Download Segmentation PNG'}
+          </button>
           <button
             onClick={handleRefresh}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-semibold transition-colors"
@@ -271,6 +269,19 @@ export const ResultsPage: React.FC = () => {
         </div>
       </div>
 
+      {downloadMessage && (
+        <p
+          role={downloadMessage.type === 'error' ? 'alert' : 'status'}
+          className={`rounded-lg border px-4 py-2.5 text-xs ${
+            downloadMessage.type === 'success'
+              ? 'border-teal-700 bg-teal-900/20 text-teal-300'
+              : 'border-rose-700 bg-rose-900/20 text-rose-300'
+          }`}
+        >
+          {downloadMessage.text}
+        </p>
+      )}
+
       {/* ── Status badge ───────────────────────────────────────────────── */}
       <div
         className={`flex items-center gap-2 px-4 py-2 rounded-lg border w-fit text-xs font-semibold ${
@@ -283,61 +294,76 @@ export const ResultsPage: React.FC = () => {
         Status: {resultRecord.status.toUpperCase()}
       </div>
 
-      {/* ── Summary cards ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="rounded-xl border border-panelBorder bg-panel p-4 space-y-1">
-          <p className="text-xs text-slate-500 uppercase tracking-wide">Model</p>
-          <p className="text-sm font-mono text-white truncate">{resultRecord.model}</p>
+      <section className="rounded-xl border border-panelBorder bg-panel p-5 space-y-4">
+        <h2 className="text-sm font-bold text-white">Processing Information</h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex items-start gap-3 rounded-lg border border-panelBorder bg-slate-950/30 p-4">
+            <Clock className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-slate-400">Inference Time</p>
+              <p className="mt-1 font-mono text-sm text-white">
+                {resultRecord.processing_time_seconds.toFixed(3)}s
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3 rounded-lg border border-panelBorder bg-slate-950/30 p-4">
+            <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-slate-400">Created At</p>
+              <p className="mt-1 text-sm text-white">{fmtDate(resultRecord.created_at)}</p>
+            </div>
+          </div>
         </div>
-        <div className="rounded-xl border border-panelBorder bg-panel p-4 space-y-1">
-          <p className="text-xs text-slate-500 uppercase tracking-wide flex items-center gap-1">
-            <Cpu className="w-3 h-3" /> Device
-          </p>
-          <p className="text-sm font-mono text-cyan-400 uppercase">{resultRecord.device}</p>
-        </div>
-        <div className="rounded-xl border border-panelBorder bg-panel p-4 space-y-1">
-          <p className="text-xs text-slate-500 uppercase tracking-wide flex items-center gap-1">
-            <Clock className="w-3 h-3" /> Inference Time
-          </p>
-          <p className="text-sm font-mono text-white">
-            {resultRecord.processing_time_seconds.toFixed(3)}s
-          </p>
-        </div>
-        <div className="rounded-xl border border-panelBorder bg-panel p-4 space-y-1">
-          <p className="text-xs text-slate-500 uppercase tracking-wide flex items-center gap-1">
-            <Layers className="w-3 h-3" /> Volume Shape
-          </p>
-          <p className="text-sm font-mono text-white">
-            {resultRecord.shape?.join(' × ') || '—'}
-          </p>
-        </div>
-      </div>
+      </section>
 
-      {/* ── Metadata row ───────────────────────────────────────────────── */}
-      <div className="rounded-xl border border-panelBorder bg-panel p-4">
-        <table className="w-full text-xs">
-          <tbody className="divide-y divide-panelBorder">
-            <tr>
-              <td className="py-2 pr-6 text-slate-500 w-40">Job ID</td>
-              <td className="py-2 font-mono text-slate-200 break-all">{resultRecord.job_id}</td>
-            </tr>
-            {resultRecord.patient_id && (
-              <tr>
-                <td className="py-2 pr-6 text-slate-500">Patient ID</td>
-                <td className="py-2 font-mono text-slate-200">{resultRecord.patient_id}</td>
-              </tr>
-            )}
-            <tr>
-              <td className="py-2 pr-6 text-slate-500">Created At</td>
-              <td className="py-2 font-mono text-slate-200">{fmtDate(resultRecord.created_at)}</td>
-            </tr>
-            <tr>
-              <td className="py-2 pr-6 text-slate-500">Project</td>
-              <td className="py-2 font-mono text-slate-200">{resultRecord.project}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <section className="space-y-4 rounded-xl border border-panelBorder bg-panel p-5">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-cyan-400" />
+          <h2 className="text-sm font-bold text-white">Image Enhancement Results</h2>
+        </div>
+        {enhanceResult ? (
+          <>
+            <p className="text-xs text-slate-400">
+              Saved {enhanceResult.modality} enhancement previews from this job.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {(['axial', 'coronal', 'sagittal'] as const).map((view) => (
+                <figure key={view} className="overflow-hidden rounded-lg border border-panelBorder bg-slate-950">
+                  <figcaption className="border-b border-panelBorder px-3 py-2 text-[11px] font-medium capitalize text-slate-300">
+                    {view} · {enhanceResult.slices[view]}
+                  </figcaption>
+                  <img
+                    src={resultsService.getPreviewUrl(currentJobId, view)}
+                    alt={`${enhanceResult.modality} ${view} enhanced MRI preview`}
+                    className="max-h-64 w-full object-contain"
+                  />
+                </figure>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="text-xs text-slate-400">No image enhancement results are available for this session.</p>
+        )}
+      </section>
+
+      <section className="space-y-4 rounded-xl border border-panelBorder bg-panel p-5">
+        <div className="flex items-center gap-2">
+          <Brain className="h-4 w-4 text-cyan-400" />
+          <h2 className="text-sm font-bold text-white">Tumor Segmentation Results</h2>
+        </div>
+        <p className="text-xs text-slate-400">
+          Generated segmentation overlay and region counts for the active MRI.
+        </p>
+        {(segmentResult || resultRecord.visualization) ? (
+          <img
+            src={resultsService.getVisualizationUrl(currentJobId)}
+            alt="Generated MRI tumor segmentation overlay"
+            className="max-h-[34rem] w-full rounded-lg border border-panelBorder bg-slate-950 object-contain"
+          />
+        ) : (
+          <p className="text-xs text-slate-400">No segmentation visualization is available for this result.</p>
+        )}
+      </section>
 
       {/* ── Voxel counts + chart ────────────────────────────────────────── */}
       <section className="rounded-xl border border-panelBorder bg-panel p-5 space-y-4">
@@ -409,50 +435,6 @@ export const ResultsPage: React.FC = () => {
         </div>
       </section>
 
-      {/* ── Evaluation metrics ──────────────────────────────────────────── */}
-      <section className="rounded-xl border border-panelBorder bg-panel p-5 space-y-4">
-        <h2 className="text-sm font-bold text-white flex items-center gap-2">
-          <BarChart2 className="w-4 h-4 text-cyan-400" />
-          Evaluation Metrics
-        </h2>
-
-        {!metrics ? (
-          <div className="flex gap-2 p-3 rounded-lg bg-amber-900/20 border border-amber-700 text-xs text-amber-300">
-            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <span>
-              <strong>Ground truth unavailable.</strong> Evaluation metrics cannot be calculated.
-              Upload with matching ground-truth segmentation masks to enable Dice, IoU, Precision
-              and Recall scoring.
-            </span>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-panelBorder">
-                  <th className="px-4 py-2 text-left text-slate-500 font-medium">Metric</th>
-                  {(['WT', 'TC', 'ET'] as const).map((r) => (
-                    <th key={r} className={`px-4 py-2 text-right font-semibold ${regionMeta[r].color}`}>
-                      {r}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-panelBorder">
-                {metricRows.map(({ label, key }) => (
-                  <tr key={key}>
-                    <td className="px-4 py-3 text-slate-400">{label}</td>
-                    {(['WT', 'TC', 'ET'] as const).map((r) => (
-                      <MetricCell key={r} value={metrics?.[r]?.[key]} />
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
       {/* ── Mask downloads ──────────────────────────────────────────────── */}
       <section className="rounded-xl border border-panelBorder bg-panel p-5 space-y-3">
         <h2 className="text-sm font-bold text-white flex items-center gap-2">
@@ -481,30 +463,6 @@ export const ResultsPage: React.FC = () => {
         </div>
       </section>
 
-      {/* ── Navigation actions ──────────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-3 pb-6">
-        <Link
-          to="/visualization"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold transition-colors"
-        >
-          <Eye className="w-4 h-4" />
-          3-View Visualization
-        </Link>
-        <Link
-          to="/enhancement"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold transition-colors"
-        >
-          <Sparkles className="w-4 h-4" />
-          Enhancement Viewer
-        </Link>
-        <button
-          onClick={() => navigate('/processing')}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold transition-colors"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Re-run Segmentation
-        </button>
-      </div>
     </div>
   );
 };
